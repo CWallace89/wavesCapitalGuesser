@@ -318,9 +318,8 @@ with st.sidebar:
         total = len(ss.order)
         asked_completed = min(ss.index, total)           # completed questions
         current_q = min(ss.index + 1, total)             # current question number (1-based)
-        st.write(f"Score: **{ss.score}**")
-        st.write(f"Asked: **{asked_completed}** / {total}")
-        st.write(f"Current: **{current_q}** / {total}")
+        st.write(f"Questions: **{asked_completed}** / {total}")
+        st.write(f"Score: **{current_q}** / {total}")
     else:
         planned_total = len(DATA_ALL) if ss.active_filter == ["Whole world"] else len(
             [r for r in DATA_ALL if r[2] in set(ss.active_filter)]
@@ -416,5 +415,6 @@ else:
             time.sleep(3.0)
             ss.index += 1
             st.rerun()
+
 
 
