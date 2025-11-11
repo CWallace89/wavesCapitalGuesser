@@ -266,11 +266,6 @@ st.caption("How well do you know the capital cities of the world?")
 with st.sidebar:
     st.header("Setup")
 
-    # Continue option (if a game is in progress)
-    if ss.started and ss.order:
-        if st.button("▶️ Continue current game"):
-            st.rerun()
-
     # Region selection (locked after start)
     if not ss.started:
         region = st.radio(
@@ -330,7 +325,7 @@ with st.sidebar:
         planned_total = len(DATA_ALL) if ss.active_filter == ["Whole world"] else len(
             [r for r in DATA_ALL if r[2] in set(ss.active_filter)]
         )
-        st.write(f"Planned questions: **{planned_total}** (when you start)")
+        st.write(f"Questions: **{planned_total}**")
 
     st.markdown("---")
     if st.button("🔁 Reset game", type="secondary"):
@@ -422,5 +417,4 @@ else:
             ss.index += 1
             st.rerun()
 
-st.caption("Accent/typo tolerant. Use Reset to change mode or regions. Shuffle applies when starting a new game.")
 
