@@ -5,11 +5,23 @@ import random
 import time
 from difflib import get_close_matches
 
-st.set_page_config(page_title="Capitals Quiz", page_icon="🧭")
+# -----------------------------------------------------------------------------
+# App configuration
+#   - Sets the browser tab title and favicon.
+#   - Do this as early as possible, before creating any UI elements.
+# -----------------------------------------------------------------------------
+st.set_page_config(page_title="Waves Capital Guesser", page_icon="🌊")
 
 # =========================================================
 # Data: Country | Capital | Continent
 # (compact list; add/remove items as you like)
+# ---------------------------------------------------------
+# RAW is a triple-pipe-delimited text block: "Country|Capital|Continent".
+# Keeping it as a raw string makes it easy to edit in-place without CSV files.
+# The parse_raw() function below will:
+#   - ignore malformed lines
+#   - de-duplicate exact triplets
+#   - return a list of tuples (country, capital, continent)
 # =========================================================
 RAW = """
 Afghanistan|Kabul|Asia
@@ -209,8 +221,19 @@ The Vatican|Vatican City|Europe
 Palestine|Ramallah|Asia
 """
 
+# -----------------------------------------------------------------------------
+# List of all selectable continents for filtering.
+# Used to drive the sidebar multiselect when playing "By continent".
+# -----------------------------------------------------------------------------
 CONTINENTS = ["Africa", "Asia", "Europe", "North America", "South America", "Oceania"]
 
+# -----------------------------------------------------------------------------
+# parse_raw(raw: str) -> list[(country, capital, continent)]
+#   - Splits the RAW block into lines, then each line into 3 parts.
+#   - Skips malformed lines.
+#   - Deduplicates exact triplets via the 'seen' set to avoid double entries.
+#   - Returns a list of tuples for fast, index-based access later.
+# -----------------------------------------------------------------------------
 def parse_raw(raw: str):
     rows, seen = [], set()
     for line in raw.strip().splitlines():
@@ -224,11 +247,24 @@ def parse_raw(raw: str):
         rows.append(tuple(parts))  # (country, capital, continent)
     return rows
 
+# -----------------------------------------------------------------------------
+# DATA_ALL holds the canonical dataset for the session.
+# All filtering uses this immutable list as source-of-truth.
+# -----------------------------------------------------------------------------
 DATA_ALL = parse_raw(RAW)
 
 # -----------------------------
 # Helpers
 # -----------------------------
+# normalize(s): makes comparing user input to answers accent/space/case tolerant.
+#   - NFKD decomposes diacritics (e.g., "São" -> "São"), then combining marks
+#     are stripped so "São" ~ "Sao".
+#   - Lowercases and keeps only alphanumeric + spaces to avoid punctuation issues.
+# is_close_guess(guess, answer, cutoff):
+#   - Returns True if normalized guess matches normalized answer exactly,
+#     or if difflib.get_close_matches says it is similar enough (>= cutoff).
+#   - We use a strict cutoff (0.92) for "correct" and a looser one (0.75)
+#     to drive the "So close!" hint.
 def normalize(s: str) -> str:
     if not isinstance(s, str):
         return ""
@@ -245,6 +281,19 @@ def is_close_guess(guess: str, answer: str, cutoff: float = 0.8) -> bool:
 # -----------------------------
 # Session State
 # -----------------------------
+# We alias st.session_state to 'ss' for brevity.
+# Using setdefault creates keys if absent while preserving existing values after reruns.
+# Keys:
+#   - started:        whether a game is in progress
+#   - mode:           direction of question ("Country → Capital" or reverse)
+#   - locked_mode:    snapshot of mode at game start so player can't change mid-game
+#   - index:          current question index into 'order'
+#   - score:          number of correctly answered questions
+#   - history:        list of (prompt, guess, correct?, answer) for review
+#   - order:          list of integer indices pointing into the *filtered* rows
+#   - active_filter:  current region selection in the UI before game starts
+#   - locked_filter:  snapshot of region(s) at game start; used for consistent run
+#   - shuffle:        whether to shuffle questions when starting a new game
 ss = st.session_state
 ss.setdefault("started", False)
 ss.setdefault("mode", "Country → Capital")
@@ -260,13 +309,22 @@ ss.setdefault("shuffle", True)
 # -----------------------------
 # Sidebar (Setup + Score)
 # -----------------------------
+# Top-of-page title & caption.
+# The sidebar provides:
+#   - Region scope selection (Whole world vs By continent)
+#   - Mode selection (locked once the game starts)
+#   - Shuffle toggle (applies to the next "new game")
+#   - Live score and counters
+#   - "Reset game" button (clears progress and reruns)
 st.title("🌊 Waves Capitals Quiz")
 st.caption("How well do you know the capital cities of the world?")
 
 with st.sidebar:
     st.header("Setup")
 
-    # Region selection (locked after start)
+    # Region selection:
+    #   - Before a game starts, allow the player to pick "Whole world" or choose continents.
+    #   - After a game starts, show a read-only summary ("locked regions").
     if not ss.started:
         region = st.radio(
             "Play scope",
@@ -279,15 +337,17 @@ with st.sidebar:
                 CONTINENTS,
                 default=(ss.active_filter if ss.active_filter != ["Whole world"] else ["Europe"]),
             )
+            # If nothing selected, default to Europe so the game always has data.
             ss.active_filter = sel or ["Europe"]
         else:
             ss.active_filter = ["Whole world"]
     else:
+        # During a game, prevent changes that would desync the planned question order.
         locked = ss.locked_filter or ss.active_filter
         st.caption("Regions locked for this game:")
         st.write(", ".join(locked if isinstance(locked, list) else [locked]))
 
-    # Mode (locked after start)
+    # Mode selection (locked after start to keep question/answer consistency).
     if not ss.started:
         ss.mode = st.radio(
             "Mode",
@@ -303,7 +363,7 @@ with st.sidebar:
         )
         st.caption(f"Mode locked: **{ss.locked_mode or ss.mode}**")
 
-    # Shuffle toggle (only for new games)
+    # Shuffle toggle (only affects a future new game).
     if not ss.started:
         ss.shuffle = st.toggle("Shuffle order on new game", value=ss.shuffle)
     else:
@@ -312,6 +372,9 @@ with st.sidebar:
     st.markdown("---")
 
     # ---- Score / Counters (works during game) ----
+    # Shows either:
+    #   - live counters (if a game is in progress and order is built)
+    #   - or the "planned total questions" for the current selection
     st.subheader("Score")
     # Determine total questions planned (if order exists, use it; else compute prospective)
     if ss.started and ss.order:
@@ -321,28 +384,39 @@ with st.sidebar:
         st.write(f"Questions: **{asked_completed}** / {total}")
         st.write(f"Score: **{ss.score}** / {total}")
     else:
+        # Before starting, estimate how many questions the chosen filter will yield.
         planned_total = len(DATA_ALL) if ss.active_filter == ["Whole world"] else len(
             [r for r in DATA_ALL if r[2] in set(ss.active_filter)]
         )
         st.write(f"Questions: **{planned_total}**")
 
     st.markdown("---")
+    # Reset clears the game-specific keys and reruns the script from the top.
     if st.button("🔁 Reset game", type="secondary"):
         for k in ["started","locked_mode","index","score","history","order","locked_filter"]:
             ss.pop(k, None)
         st.rerun()
 
+# Visual separator between header and game content.
 st.write("---")
 
 # -----------------------------
 # Filtering + Order
 # -----------------------------
+# filtered_rows(active_filter):
+#   - Returns a subset of DATA_ALL based on selected continent(s), or the whole list.
 def filtered_rows(active_filter):
     if active_filter == ["Whole world"]:
         return DATA_ALL
     allowed = set(active_filter)
     return [r for r in DATA_ALL if r[2] in allowed]
 
+# ensure_order_built():
+#   - Called right before starting a game.
+#   - Locks the filter selection (so later UI changes can't affect this run).
+#   - Builds the 'order' as a list of integer indices into the filtered rows.
+#   - Optionally shuffles those indices for a randomized quiz.
+#   - Resets progress counters (index, score, history).
 def ensure_order_built():
     if ss.order:
         return
@@ -359,7 +433,14 @@ def ensure_order_built():
 # -----------------------------
 # Game flow
 # -----------------------------
+# The script renders one question per run.
+# Streamlit re-executes top-to-bottom on every interaction, so we:
+#   - keep persistent variables in st.session_state
+#   - gate logic on ss.started and ss.index
+#   - use st.form so typing doesn't submit on every keystroke
+#   - use st.rerun() after advancing to the next question to refresh the UI
 if not ss.started:
+    # Pre-game screen: the user sets options and starts the quiz.
     st.info("Choose mode and region(s), then click **Start new game**.")
     if st.button("🚀 Start new game", type="primary"):
         ensure_order_built()
@@ -367,17 +448,25 @@ if not ss.started:
         ss.locked_mode = ss.mode
         st.rerun()
 else:
+    # In-game: render either the completion screen or the current question.
     rows = filtered_rows(ss.locked_filter or ss.active_filter)
     if not rows:
+        # Defensive guard: in practice this shouldn't happen because we lock filters.
         st.warning("No countries found for that selection.")
     elif ss.index >= len(ss.order):
+        # Finished all planned questions.
         st.success(f"All done! Final score: **{ss.score} / {len(ss.order)}**")
+        # Show an expandable review of the entire attempt using the history log.
         with st.expander("Review answers"):
             for q, g, ok, ans in ss.history:
                 icon = "✅" if ok else "❌"
                 st.write(f"{icon} **{q}** → {g} → **{ans}**")
     else:
+        # Retrieve the current (country, capital, continent) from the filtered dataset
+        # using the integer index stored in ss.order[ss.index].
         country, capital, continent = rows[ss.order[ss.index]]
+
+        # Decide which side is the prompt vs the expected answer based on locked mode.
         mode = ss.locked_mode or ss.mode
         if mode == "Country → Capital":
             prompt = f"({continent}) What's the capital of **{country}**?"
@@ -386,21 +475,30 @@ else:
             prompt = f"({continent}) **{capital}** is the capital of which country?"
             correct = country
 
+        # The question header shows a 1-based question number.
         st.subheader(f"Question {ss.index + 1}")
         st.write(prompt)
 
+        # Use a form so "Enter" or clicking the button triggers a single submission,
+        # not a submit on every keypress. The key includes ss.index to ensure each
+        # question has a distinct form identity across reruns.
         with st.form(key=f"q{ss.index}"):
             guess = st.text_input("Your answer:", "")
             submitted = st.form_submit_button("Submit")
 
+        # Handle a submitted guess:
+        #   - If the guess is "close enough" at a strict cutoff (0.92), count it correct.
+        #   - Otherwise, if it's just "near" (>=0.75), show a softer warning.
+        #   - Append the attempt (prompt, guess, ok, answer) to history for review pane.
+        #   - On correct or give-up, advance index, show a toast, pause briefly, rerun.
         if submitted:
             if is_close_guess(guess, correct, cutoff=0.92):
                 ss.score += 1
                 ss.history.append((prompt, guess, True, correct))
-                st.balloons()
+                st.balloons()  # fun confetti animation
                 st.success(f"🎉 Correct! **{correct}**")
                 st.toast("✅ Moving to next question...", icon="✅")
-                time.sleep(3.0)
+                time.sleep(3.0)  # small UX pause so the user can read feedback
                 ss.index += 1
                 st.rerun()
             else:
@@ -408,14 +506,12 @@ else:
                 st.warning("So close!" if near else "Not quite, try again.")
                 ss.history.append((prompt, guess, False, correct))
 
+        # "Give Up" lets the user skip the current question without scoring.
+        # We still store the correct answer in history for later review.
         if st.button("Give Up 🛑", type="secondary"):
             ss.history.append((prompt, "(gave up)", False, correct))
             st.error(f"❌ Gave up! The answer was **{correct}**")
             st.toast("❌ Moving on...", icon="❌")
-            time.sleep(3.0)
+            time.sleep(3.0)  # brief pause for readability
             ss.index += 1
             st.rerun()
-
-
-
-
