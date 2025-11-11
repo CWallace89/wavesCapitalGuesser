@@ -260,8 +260,8 @@ ss.setdefault("shuffle", True)
 # -----------------------------
 # Sidebar (Setup + Score)
 # -----------------------------
-st.title("🧭 Capitals Quiz")
-st.caption("Guess capitals or countries by region. Auto-advance on correct answers or give-ups (3s pause).")
+st.title("🌊 Waves Capitals Quiz")
+st.caption("How well do you know the capital cities of the world?")
 
 with st.sidebar:
     st.header("Setup")
@@ -423,3 +423,4 @@ else:
             st.rerun()
 
 st.caption("Accent/typo tolerant. Use Reset to change mode or regions. Shuffle applies when starting a new game.")
+
